@@ -9,7 +9,10 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${userHome}/miniconda3/envs/data/Lib;${userHome} /miniconda3/envs/data;${userHome} /miniconda3/envs/data/Lib/site-packages;${env:PYTHONPATH}"
+            }
         }
     ]
 }
