@@ -5,6 +5,7 @@ from shapely.geometry import Point, MultiPolygon, Polygon
 from enum import IntEnum, unique
 from collections import defaultdict
 from itertools import chain
+import geopandas as gpd
 
 ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
@@ -180,9 +181,12 @@ class VertexNode:
 
 
 class LineGroupping:
-    def __init__(self, data):
+    def __init__(self, in_line_file, in_poly_file):
         # remove empty and null geometry
-        self.data = data
+        self.data = gpd.read_file(in_line_file)
+        self.data = self.data[~self.data.geometry.isna() & ~self.data.geometry.is_empty]
+        self.data.reset_index(inplace=True, drop=True)
+
         self.sim_geom = self.data.simplify(10)
 
         self.G = nk.Graph(len(self.data))
@@ -191,11 +195,7 @@ class LineGroupping:
         self.groups = [None] * len(self.data)
         self.vertex_of_concern = []
 
-        self.create_vertex_list()
-        if not self.has_groub_attr:
-            self.group_lines()
-
-        self.find_vertex_for_poly_overlaps()
+        self.polys = gpd.read_file(in_poly_file)
 
     def create_vertex_list(self):
         self.vertex_list = []
@@ -266,30 +266,85 @@ class LineGroupping:
             i for i in self.merged_vertex_list if i.vertex_class in concern_classes
         ]
 
-def cleanup_poly_and_line(p_cleanup, p_primary):
-    p_cleanup_new = []
-    for p in p_cleanup:
-        diff = p["poly"].difference(p_primary)
-        if diff.geom_type == "Polygon":
-            p["poly"] = diff
-            p["line"] = p["line"].intersection(p["poly"])
-            p_cleanup_new.append(p)
-        elif diff.geom_type == "MultiPolygon":
-            area = p["poly"].area
-            reserved = []
-            for i in diff.geoms:
-                if i.area > 0.01 * area:  # small part
-                    reserved.append(i)
+    def line_and_poly_final_cleanup(self):
+        sindex_poly = self.polys.sindex
+        for i in self.vertex_of_concern:
+            polys = []
+            primary_lines = []
+            cleanup_lines = []
 
-            if len(reserved) == 0:
-                pass
-            elif len(reserved) == 1:
-                p["poly"] = Polygon(*reserved)
+            # retrieve primary lines
+            for j in i.line_connected[0]:  # only one connected line is available
+                primary_lines.append(i.get_line(j))
+
+            for j in i.line_not_connected:  # only one connected line is available
+                cleanup_lines.append({'idx_line': j, 'line': i.get_line(j)})
+
+            idx = sindex_poly.query(i.vertex, predicate="within")
+            if len(idx) == 0:
+                continue
+
+            polys = self.polys.loc[idx].geometry
+            poly_cleanup = []
+            poly_primary = []
+            for i, p in polys.items():
+                if p.contains(primary_lines[0]) or p.contains(primary_lines[1]):
+                    poly_primary.append(p)
+                else:
+                    for line in cleanup_lines:
+                        if p.contains(line['line']):
+                            line.update({'idx_poly': i, 'poly': p})  # addpolygon info to line
+                            poly_cleanup.append(line)
+
+            poly_primary = MultiPolygon(poly_primary)
+            poly_cleanup = self.cleanup_poly_and_line(poly_cleanup, poly_primary)
+            # TODO: update all same lines inn VertexNode
+            
+            for p in poly_cleanup:
+                print(p['idx_poly'], p['idx_line'])
+                self.polys.at[p['idx_poly'], 'geometry'] = p['poly']
+                self.data.at[p['idx_line'], 'geometry'] = p['line']
+
+    def run(self):    
+        self.create_vertex_list()
+        if not self.has_groub_attr:
+            self.group_lines()
+
+        self.find_vertex_for_poly_overlaps()
+        self.data["group"] = self.groups  # assign group attribute
+
+        self.line_and_poly_final_cleanup()
+
+    def save_file(self, out_line, out_poly):
+        self.data.to_file(out_line)
+        self.polys.to_file(out_poly)
+
+    @staticmethod
+    def cleanup_poly_and_line(p_cleanup, p_primary):
+        p_cleanup_new = []
+        for p in p_cleanup:
+            diff = p["poly"].difference(p_primary)
+            if diff.geom_type == "Polygon":
+                p["poly"] = diff
                 p["line"] = p["line"].intersection(p["poly"])
                 p_cleanup_new.append(p)
-            else:
-                p["poly"] = MultiPolygon(reserved)
-                p["line"] = p["line"].intersection(p["poly"])
-                p_cleanup_new.append(p)
+            elif diff.geom_type == "MultiPolygon":
+                area = p["poly"].area
+                reserved = []
+                for i in diff.geoms:
+                    if i.area > 0.05 * area:  # small part
+                        reserved.append(i)
 
-    return p_cleanup_new
+                if len(reserved) == 0:
+                    pass
+                elif len(reserved) == 1:
+                    p["poly"] = Polygon(*reserved)
+                    p["line"] = p["line"].intersection(p["poly"])
+                    p_cleanup_new.append(p)
+                else:
+                    # TODO output all MultiPolygons which should be dealt with
+                    p["poly"] = MultiPolygon(reserved)
+                    p["line"] = p["line"].intersection(p["poly"])
+                    p_cleanup_new.append(p)
+
+        return p_cleanup_new
