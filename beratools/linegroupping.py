@@ -43,19 +43,7 @@ def get_angle(line, end_index):
 
     delta_x = pt_2.x - pt_1.x
     delta_y = pt_2.y - pt_1.y
-    # if np.isclose(pt_1.x, pt_2.x):
-    #     angle = np.pi / 2
-    #     if delta_y > 0:
-    #         angle = np.pi / 2
-    #     elif delta_y < 0:
-    #         angle = -np.pi / 2
-    # else:
-    #     angle = np.arctan(delta_y / delta_x)
     angle = np.arctan2(delta_y, delta_x)
-
-    # # arctan is in range [-pi/2, pi/2], regulate all angles to [[-pi/2, 3*pi/2]]
-    # if delta_x < 0:
-    #     angle += np.pi  # the second or fourth quadrant
 
     return angle
 
