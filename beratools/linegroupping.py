@@ -262,21 +262,15 @@ class LineGroupping:
         for i in self.vertex_of_concern:
             poly_trim = []
             primary_lines = []
-            cleanup_lines = []
 
             # retrieve primary lines
             for j in i.line_connected[0]:  # only one connected line is available
                 primary_lines.append(i.get_line(j))
 
             for j in i.line_not_connected:  # only one connected line is available
-                cleanup_lines.append({'idx_line': j, 'line': i.get_line(j)})
-
                 trim = PolygonTrimming(line_index = j, 
                                        line_cleanup = i.get_line(j))
                 
-                if j == 1837:
-                    print('test')
-
                 poly_trim.append(trim)
 
             idx = sindex_poly.query(i.vertex, predicate="within")
@@ -284,32 +278,19 @@ class LineGroupping:
                 continue
 
             polys = self.polys.loc[idx].geometry
-            poly_cleanup = []
             poly_primary = []
             for j, p in polys.items():
                 if p.contains(primary_lines[0]) or p.contains(primary_lines[1]):
                     poly_primary.append(p)
                 else:
-                    for k, line in enumerate(cleanup_lines):
-                        if p.contains(line['line']):
-                            line.update({'idx_poly': j, 'poly': p})  # addpolygon info to line
-                            poly_cleanup.append(line)
-
-                        if p.contains(poly_trim[k].line_cleanup):
-                            poly_trim[k].poly_cleanup = p
-                            poly_trim[k].poly_index = j
+                    for trim in poly_trim:
+                        if p.contains(trim.line_cleanup):
+                            trim.poly_cleanup = p
+                            trim.poly_index = j
 
             poly_primary = MultiPolygon(poly_primary)
             for t in poly_trim:
                 t.poly_primary = poly_primary
-
-            poly_cleanup = self.cleanup_poly_and_line(poly_cleanup, poly_primary)
-            # TODO: update all same lines inn VertexNode
-            
-            for p in poly_cleanup:
-                print(p['idx_poly'], p['idx_line'])
-                # self.polys.at[p['idx_poly'], 'geometry'] = p['poly']
-                # self.data.at[p['idx_line'], 'geometry'] = p['line']
 
             for p in poly_trim:
                 p.trim()
@@ -329,36 +310,6 @@ class LineGroupping:
     def save_file(self, out_line, out_poly):
         self.data.to_file(out_line)
         self.polys.to_file(out_poly)
-
-    @staticmethod
-    def cleanup_poly_and_line(p_cleanup, p_primary):
-        p_cleanup_new = []
-        for p in p_cleanup:
-            diff = p["poly"].difference(p_primary)
-            if diff.geom_type == "Polygon":
-                p["poly"] = diff
-                p["line"] = p["line"].intersection(p["poly"])
-                p_cleanup_new.append(p)
-            elif diff.geom_type == "MultiPolygon":
-                area = p["poly"].area
-                reserved = []
-                for i in diff.geoms:
-                    if i.area > 0.05 * area:  # small part
-                        reserved.append(i)
-
-                if len(reserved) == 0:
-                    pass
-                elif len(reserved) == 1:
-                    p["poly"] = Polygon(*reserved)
-                    p["line"] = p["line"].intersection(p["poly"])
-                    p_cleanup_new.append(p)
-                else:
-                    # TODO output all MultiPolygons which should be dealt with
-                    p["poly"] = MultiPolygon(reserved)
-                    p["line"] = p["line"].intersection(p["poly"])
-                    p_cleanup_new.append(p)
-
-        return p_cleanup_new
     
 @dataclass
 class PolygonTrimming():
