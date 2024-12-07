@@ -1,11 +1,13 @@
 import networkit as nk
 import shapely
 import numpy as np
-from shapely.geometry import Point, MultiPolygon, Polygon
+from shapely.geometry import Point, MultiPolygon, Polygon, LineString
 from enum import IntEnum, unique
 from collections import defaultdict
 from itertools import chain
 import geopandas as gpd
+
+from dataclasses import dataclass, field
 
 ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
@@ -268,8 +270,9 @@ class LineGroupping:
 
     def line_and_poly_final_cleanup(self):
         sindex_poly = self.polys.sindex
+
         for i in self.vertex_of_concern:
-            polys = []
+            poly_trim = []
             primary_lines = []
             cleanup_lines = []
 
@@ -280,6 +283,14 @@ class LineGroupping:
             for j in i.line_not_connected:  # only one connected line is available
                 cleanup_lines.append({'idx_line': j, 'line': i.get_line(j)})
 
+                trim = PolygonTrimming(line_index = j, 
+                                       line_cleanup = i.get_line(j))
+                
+                if j == 1837:
+                    print('test')
+
+                poly_trim.append(trim)
+
             idx = sindex_poly.query(i.vertex, predicate="within")
             if len(idx) == 0:
                 continue
@@ -287,23 +298,35 @@ class LineGroupping:
             polys = self.polys.loc[idx].geometry
             poly_cleanup = []
             poly_primary = []
-            for i, p in polys.items():
+            for j, p in polys.items():
                 if p.contains(primary_lines[0]) or p.contains(primary_lines[1]):
                     poly_primary.append(p)
                 else:
-                    for line in cleanup_lines:
+                    for k, line in enumerate(cleanup_lines):
                         if p.contains(line['line']):
-                            line.update({'idx_poly': i, 'poly': p})  # addpolygon info to line
+                            line.update({'idx_poly': j, 'poly': p})  # addpolygon info to line
                             poly_cleanup.append(line)
 
+                        if p.contains(poly_trim[k].line_cleanup):
+                            poly_trim[k].poly_cleanup = p
+                            poly_trim[k].poly_index = j
+
             poly_primary = MultiPolygon(poly_primary)
+            for t in poly_trim:
+                t.poly_primary = poly_primary
+
             poly_cleanup = self.cleanup_poly_and_line(poly_cleanup, poly_primary)
             # TODO: update all same lines inn VertexNode
             
             for p in poly_cleanup:
                 print(p['idx_poly'], p['idx_line'])
-                self.polys.at[p['idx_poly'], 'geometry'] = p['poly']
-                self.data.at[p['idx_line'], 'geometry'] = p['line']
+                # self.polys.at[p['idx_poly'], 'geometry'] = p['poly']
+                # self.data.at[p['idx_line'], 'geometry'] = p['line']
+
+            for p in poly_trim:
+                p.trim()
+                self.polys.at[p.poly_index, 'geometry'] = p.poly_cleanup
+                self.data.at[p.line_index, 'geometry'] = p.line_cleanup
 
     def run(self):    
         self.create_vertex_list()
@@ -348,3 +371,39 @@ class LineGroupping:
                     p_cleanup_new.append(p)
 
         return p_cleanup_new
+    
+@dataclass
+class PolygonTrimming():
+    """ Store polygon and line to trim. Primary polygon is used to trim both """
+
+    poly_primary : MultiPolygon = field(default=None)
+    poly_index: int = field(default=-1)
+    poly_cleanup: Polygon = field(default=None)
+    line_index: int = field(default=-1)
+    line_cleanup: LineString = field(default=None)
+    
+    def trim(self):
+        # TODO: chech why there is such cases
+        if self.poly_cleanup is None:
+            print('No polygon to trim.')
+            return
+
+        diff = self.poly_cleanup.difference(self.poly_primary)
+        if diff.geom_type == "Polygon":
+            self.poly_cleanup = diff
+        elif diff.geom_type == "MultiPolygon":
+            area = self.poly_cleanup.area
+            reserved = []
+            for i in diff.geoms:
+                if i.area > 0.05 * area:  # small part
+                    reserved.append(i)
+
+            if len(reserved) == 0:
+                pass
+            elif len(reserved) == 1:
+                self.poly_cleanup = Polygon(*reserved)
+            else:
+                # TODO output all MultiPolygons which should be dealt with
+                self.poly_cleanup = MultiPolygon(reserved)
+        
+        self.line_cleanup = self.line_cleanup.intersection(self.poly_cleanup)
