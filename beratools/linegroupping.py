@@ -310,8 +310,9 @@ class LineGroupping:
     def run_cleanup(self):    
         self.line_and_poly_final_cleanup()
 
-    def line_merge(self):
+    def run_line_merge(self):
         self.merged = self.data.dissolve(by=GROUP_ATTRIBUTE)
+        self.merged.geometry = self.merged.line_merge()
         num = 0
         for i in self.merged.itertuples():
             num += 1
