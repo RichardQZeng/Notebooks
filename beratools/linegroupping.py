@@ -8,6 +8,7 @@ from itertools import chain
 import geopandas as gpd
 
 from dataclasses import dataclass, field
+from mergelines import MergeLines
 
 ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
@@ -186,6 +187,7 @@ class LineGroupping:
         self.vertex_of_concern = []
 
         self.polys = gpd.read_file(in_poly_file)
+        self.merged = None  # merged lines
 
     def create_vertex_list(self):
         self.vertex_list = []
@@ -297,7 +299,7 @@ class LineGroupping:
                 self.polys.at[p.poly_index, 'geometry'] = p.poly_cleanup
                 self.data.at[p.line_index, 'geometry'] = p.line_cleanup
 
-    def run(self):    
+    def run_groupping(self):    
         self.create_vertex_list()
         if not self.has_groub_attr:
             self.group_lines()
@@ -305,7 +307,19 @@ class LineGroupping:
         self.find_vertex_for_poly_overlaps()
         self.data["group"] = self.groups  # assign group attribute
 
+    def run_cleanup(self):    
         self.line_and_poly_final_cleanup()
+
+    def line_merge(self):
+        self.merged = self.data.dissolve(by=GROUP_ATTRIBUTE)
+        num = 0
+        for i in self.merged.itertuples():
+            num += 1
+            if i.geometry.geom_type == "MultiLineString":
+                worker = MergeLines(i.geometry)
+                merged_line = worker.merge_all_lines()
+                if merged_line:
+                    self.merged.at[i.Index, "geometry"] = merged_line
 
     def save_file(self, out_line, out_poly):
         self.data.to_file(out_line)
