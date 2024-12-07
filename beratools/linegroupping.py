@@ -1,7 +1,7 @@
 import networkit as nk
 import shapely
 import numpy as np
-from shapely.geometry import Point, MultiPolygon, Polygon, LineString
+from shapely.geometry import Point, MultiPolygon, Polygon, LineString, MultiLineString
 from enum import IntEnum, unique
 from collections import defaultdict
 from itertools import chain
@@ -13,6 +13,7 @@ from mergelines import MergeLines
 ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
 GROUP_ATTRIBUTE = "group"
+TRIM_THRESHOLD = 0.05
 
 
 def points_in_line(line):
@@ -258,7 +259,7 @@ class LineGroupping:
             i for i in self.merged_vertex_list if i.vertex_class in concern_classes
         ]
 
-    def line_and_poly_final_cleanup(self):
+    def line_and_poly_cleanup(self):
         sindex_poly = self.polys.sindex
 
         for i in self.vertex_of_concern:
@@ -308,7 +309,7 @@ class LineGroupping:
         self.data["group"] = self.groups  # assign group attribute
 
     def run_cleanup(self):    
-        self.line_and_poly_final_cleanup()
+        self.line_and_poly_cleanup()
 
     def run_line_merge(self):
         self.merged = self.data.dissolve(by=GROUP_ATTRIBUTE)
@@ -325,7 +326,7 @@ class LineGroupping:
     def save_file(self, out_line, out_poly):
         self.data.to_file(out_line)
         self.polys.to_file(out_poly)
-    
+
 @dataclass
 class PolygonTrimming():
     """ Store polygon and line to trim. Primary polygon is used to trim both """
@@ -349,7 +350,7 @@ class PolygonTrimming():
             area = self.poly_cleanup.area
             reserved = []
             for i in diff.geoms:
-                if i.area > 0.05 * area:  # small part
+                if i.area > TRIM_THRESHOLD * area:  # small part
                     reserved.append(i)
 
             if len(reserved) == 0:
@@ -360,4 +361,20 @@ class PolygonTrimming():
                 # TODO output all MultiPolygons which should be dealt with
                 self.poly_cleanup = MultiPolygon(reserved)
         
-        self.line_cleanup = self.line_cleanup.intersection(self.poly_cleanup)
+        diff = self.line_cleanup.intersection(self.poly_cleanup)
+        if diff.geom_type == "LineString":
+            self.line_cleanup = diff
+        elif diff.geom_type == "MultiLineString":
+            length = self.line_cleanup.length
+            reserved = []
+            for i in diff.geoms:
+                if i.length > TRIM_THRESHOLD * length:  # small part
+                    reserved.append(i)
+
+            if len(reserved) == 0:
+                pass
+            elif len(reserved) == 1:
+                self.line_cleanup = LineString(*reserved)
+            else:
+                # TODO output all MultiPolygons which should be dealt with
+                self.poly_cleanup = MultiLineString(reserved)
