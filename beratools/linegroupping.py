@@ -217,16 +217,16 @@ class VertexNode:
 class LineGroupping:
     def __init__(self, in_line_file, in_poly_file):
         # remove empty and null geometry
-        self.data = gpd.read_file(in_line_file)
-        self.data = self.data[~self.data.geometry.isna() & ~self.data.geometry.is_empty]
-        self.data.reset_index(inplace=True, drop=True)
+        self.lines = gpd.read_file(in_line_file)
+        self.lines = self.lines[~self.lines.geometry.isna() & ~self.lines.geometry.is_empty]
+        self.lines.reset_index(inplace=True, drop=True)
 
-        self.sim_geom = self.data.simplify(10)
+        self.sim_geom = self.lines.simplify(10)
 
-        self.G = nk.Graph(len(self.data))
+        self.G = nk.Graph(len(self.lines))
         self.merged_vertex_list = []
         self.has_groub_attr = False
-        self.groups = [None] * len(self.data)
+        self.groups = [None] * len(self.lines)
 
         self.vertex_list = []
         self.vertex_of_concern = []
@@ -235,14 +235,18 @@ class LineGroupping:
         self.polys = gpd.read_file(in_poly_file)
         self.merged = None  # merged lines
 
+        # invalid geoms in final goem list
+        self.invalid_lines = None
+        self.invalid_polygons = None
+
     def create_vertex_list(self):
         # check if data has group column
-        if GROUP_ATTRIBUTE in self.data.keys():
-            self.groups = self.data[GROUP_ATTRIBUTE]
+        if GROUP_ATTRIBUTE in self.lines.keys():
+            self.groups = self.lines[GROUP_ATTRIBUTE]
             self.has_groub_attr = True
 
         for idx, s_geom, geom, group in zip(
-            *zip(*self.sim_geom.items()), self.data.geometry, self.groups
+            *zip(*self.sim_geom.items()), self.lines.geometry, self.groups
         ):
             self.vertex_list.append(VertexNode(idx, geom, s_geom, 0, group))
             self.vertex_list.append(VertexNode(idx, geom, s_geom, -1, group))
@@ -382,7 +386,7 @@ class LineGroupping:
                 p.trim()
                 # update main line and polygon dataframe
                 self.polys.at[p.poly_index, 'geometry'] = p.poly_cleanup
-                self.data.at[p.line_index, 'geometry'] = p.line_cleanup
+                self.lines.at[p.line_index, 'geometry'] = p.line_cleanup
                 # update VertexNode's line
                 self.update_line_in_vertex_node(p.line_index, p.line_cleanup)
 
@@ -392,13 +396,13 @@ class LineGroupping:
             self.group_lines()
 
         self.find_vertex_for_poly_trimming()
-        self.data["group"] = self.groups  # assign group attribute
+        self.lines["group"] = self.groups  # assign group attribute
 
     def run_cleanup(self):    
         self.line_and_poly_cleanup()
 
     def run_line_merge(self):
-        self.merged = self.data.dissolve(by=GROUP_ATTRIBUTE)
+        self.merged = self.lines.dissolve(by=GROUP_ATTRIBUTE)
         self.merged.geometry = self.merged.line_merge()
         num = 0
         for i in self.merged.itertuples():
@@ -418,7 +422,7 @@ class LineGroupping:
         pass
 
     def save_file(self, out_line, out_poly):
-        self.data.to_file(out_line)
+        self.lines.to_file(out_line)
         self.polys.to_file(out_poly)
 
 @dataclass
