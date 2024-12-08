@@ -1,5 +1,6 @@
 import networkit as nk
-import shapely
+from shapely import force_2d, STRtree, get_point
+from shapely.ops import split
 import numpy as np
 from shapely.geometry import Point, MultiPolygon, Polygon, LineString, MultiLineString
 from enum import IntEnum, unique
@@ -15,6 +16,7 @@ ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
 GROUP_ATTRIBUTE = "group"
 TRIM_THRESHOLD = 0.05
+TRANSECT_LENGTH = 10
 
 
 def points_in_line(line):
@@ -57,6 +59,7 @@ class VertexClass(IntEnum):
     FOUR_WAY_ZERO_PRIMARY_LINE = 3
     FOUR_WAY_ONE_PRIMARY_LINE = 4
     FOUR_WAY_TWO_PRIMARY_LINE = 5
+    SINGLE_WAY = 6
 
 @dataclass
 class SingleLine():
@@ -68,6 +71,22 @@ class SingleLine():
 
     def get_angle_for_line(self):
         return get_angle(self.sim_line, self.vertex_index)
+    
+    def end_transect(self):
+        coords = self.line.coords
+        end_seg = None
+        if self.vertex_index == 0:
+            end_seg = LineString([coords[0], coords[1]])
+        elif self.vertex_index == -1:
+            end_seg = LineString([coords[-1], coords[-2]])
+
+        l_left = end_seg.offset_curve(10)        
+        l_right = end_seg.offset_curve(-10)
+
+        return LineString(
+            [l_left.coords[0], l_right.coords[0]]
+        )
+
 
 class VertexNode:
     """
@@ -84,12 +103,12 @@ class VertexNode:
 
     def set_vertex(self, line, vertex_index):
         """ Set vertex coord """
-        self.vertex = shapely.force_2d(shapely.get_point(line, vertex_index))
+        self.vertex = force_2d(get_point(line, vertex_index))
     
-    def add_line(self, l_dupli):
+    def add_line(self, line_class):
         """ Common function for adding line when creating or merging other VertexNode """
-        self.line_list.append(l_dupli)
-        self.set_vertex(l_dupli.line, l_dupli.vertex_index)
+        self.line_list.append(line_class)
+        self.set_vertex(line_class.line, line_class.vertex_index)
 
     def get_line(self, line_id):
         for line in self.line_list:
@@ -113,6 +132,8 @@ class VertexNode:
                 self.vertex_class = VertexClass.THREE_WAY_ZERO_PRIMARY_LINE
             if len(self.line_connected) == 1:
                 self.vertex_class = VertexClass.THREE_WAY_ONE_PRIMARY_LINE
+        elif len(self.line_list) == 1:
+            self.vertex_class = VertexClass.SINGLE_WAY
 
     def has_group_attr(self):
         """If all values in group list are valid value, return True"""
@@ -216,7 +237,7 @@ class LineGroupping:
         for i in self.vertex_list:
             v_points.append(i.vertex.buffer(1))  # small polygon around vertices
 
-        v_index = shapely.STRtree(v_points)
+        v_index = STRtree(v_points)
 
         vertex_visited = [False] * len(self.vertex_list)
 
@@ -262,6 +283,7 @@ class LineGroupping:
         concern_classes = (
             VertexClass.FOUR_WAY_ONE_PRIMARY_LINE,
             VertexClass.THREE_WAY_ONE_PRIMARY_LINE,
+            VertexClass.SINGLE_WAY
         )
         self.vertex_of_concern = [
             i for i in self.merged_vertex_list if i.vertex_class in concern_classes
@@ -271,6 +293,43 @@ class LineGroupping:
         sindex_poly = self.polys.sindex
 
         for i in self.vertex_of_concern:
+            idx = sindex_poly.query(i.vertex, predicate="within")
+            if len(idx) == 0:
+                continue
+        
+            if i.vertex_class == VertexClass.SINGLE_WAY:
+                if len(idx) > 1:
+                    print('Too many polygons')
+                    continue
+
+                # TODO use only last segment to reduce computation
+                single_line = i.line_list[0]
+                poly = self.polys.loc[*idx].geometry
+                split_poly = split(poly, single_line.end_transect())
+                
+                if len(split_poly.geoms) != 2:
+                    continue
+
+                # check geom type
+                none_poly = False
+                for i in split_poly.geoms:
+                    if i.geom_type != 'Polygon':
+                        none_poly = True
+
+                if none_poly:
+                    continue
+                
+                # only two polygons in split_poly
+                if split_poly.geoms[0].area > split_poly.geoms[1].area:
+                    poly = split_poly.geoms[0]
+                else:
+                    poly = split_poly.geoms[1]
+                    
+                self.polys.at[idx[0], "geometry"] = poly 
+
+                continue
+            
+            # other classes
             poly_trim = []
             primary_lines = []
 
@@ -283,10 +342,6 @@ class LineGroupping:
                                        line_cleanup = i.get_line(j))
                 
                 poly_trim.append(trim)
-
-            idx = sindex_poly.query(i.vertex, predicate="within")
-            if len(idx) == 0:
-                continue
 
             polys = self.polys.loc[idx].geometry
             poly_primary = []
