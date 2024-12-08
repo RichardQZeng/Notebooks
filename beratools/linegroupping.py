@@ -12,11 +12,25 @@ import geopandas as gpd
 from dataclasses import dataclass, field
 from mergelines import MergeLines
 
+@unique
+class VertexClass(IntEnum):
+    THREE_WAY_ZERO_PRIMARY_LINE = 1
+    THREE_WAY_ONE_PRIMARY_LINE = 2
+    FOUR_WAY_ZERO_PRIMARY_LINE = 3
+    FOUR_WAY_ONE_PRIMARY_LINE = 4
+    FOUR_WAY_TWO_PRIMARY_LINE = 5
+    SINGLE_WAY = 6
+
 ANGLE_TOLERANCE = np.pi / 10
 TURN_ANGLE_TOLERANCE = np.pi * 0.5  # (little bigger than right angle)
 GROUP_ATTRIBUTE = "group"
 TRIM_THRESHOLD = 0.05
 TRANSECT_LENGTH = 10
+CONCERN_CLASSES = (
+    VertexClass.FOUR_WAY_ONE_PRIMARY_LINE,
+    VertexClass.THREE_WAY_ONE_PRIMARY_LINE,
+    VertexClass.SINGLE_WAY
+)
 
 
 def points_in_line(line):
@@ -52,15 +66,6 @@ def get_angle(line, end_index):
 
     return angle
 
-@unique
-class VertexClass(IntEnum):
-    THREE_WAY_ZERO_PRIMARY_LINE = 1
-    THREE_WAY_ONE_PRIMARY_LINE = 2
-    FOUR_WAY_ZERO_PRIMARY_LINE = 3
-    FOUR_WAY_ONE_PRIMARY_LINE = 4
-    FOUR_WAY_TWO_PRIMARY_LINE = 5
-    SINGLE_WAY = 6
-
 @dataclass
 class SingleLine():
     line_id: int = field(default=0)
@@ -86,6 +91,9 @@ class SingleLine():
         return LineString(
             [l_left.coords[0], l_right.coords[0]]
         )
+    
+    def update_line(self, line):
+        self.line = line
 
 
 class VertexNode:
@@ -114,6 +122,11 @@ class VertexNode:
         for line in self.line_list:
             if line.line_id == line_id:
                 return line.line
+    
+    def update_line(self, line_id, line):
+        for i in self.line_list:
+            if i.line_id == line_id:
+                i.update_line(line)
 
     def merge(self, vertex):
         """ merge other VertexNode if they have same vertex coords """
@@ -214,14 +227,15 @@ class LineGroupping:
         self.merged_vertex_list = []
         self.has_groub_attr = False
         self.groups = [None] * len(self.data)
+
+        self.vertex_list = []
         self.vertex_of_concern = []
+        self.v_index = None  # sindex of all vertices for vertex_list
 
         self.polys = gpd.read_file(in_poly_file)
         self.merged = None  # merged lines
 
     def create_vertex_list(self):
-        self.vertex_list = []
-
         # check if data has group column
         if GROUP_ATTRIBUTE in self.data.keys():
             self.groups = self.data[GROUP_ATTRIBUTE]
@@ -237,7 +251,7 @@ class LineGroupping:
         for i in self.vertex_list:
             v_points.append(i.vertex.buffer(1))  # small polygon around vertices
 
-        v_index = STRtree(v_points)
+        self.v_index = STRtree(v_points)
 
         vertex_visited = [False] * len(self.vertex_list)
 
@@ -245,7 +259,7 @@ class LineGroupping:
             if vertex_visited[i]:
                 continue
 
-            s_list = v_index.query(pt)
+            s_list = self.v_index.query(pt)
 
             vertex = self.vertex_list[i]
             if len(s_list) > 1:
@@ -279,14 +293,18 @@ class LineGroupping:
 
             group += 1
 
-    def find_vertex_for_poly_overlaps(self):
-        concern_classes = (
-            VertexClass.FOUR_WAY_ONE_PRIMARY_LINE,
-            VertexClass.THREE_WAY_ONE_PRIMARY_LINE,
-            VertexClass.SINGLE_WAY
-        )
+    def update_line_in_vertex_node(self, line_id, line):
+        """
+        Update line in VertexNode after trimming
+        """
+        idx = self.v_index.query(line)
+        for i in idx:
+            v = self.vertex_list[i]
+            v.update_line(line_id, line)
+
+    def find_vertex_for_poly_trimming(self):
         self.vertex_of_concern = [
-            i for i in self.merged_vertex_list if i.vertex_class in concern_classes
+            i for i in self.merged_vertex_list if i.vertex_class in CONCERN_CLASSES
         ]
 
     def line_and_poly_cleanup(self):
@@ -330,7 +348,7 @@ class LineGroupping:
                 continue
             
             # other classes
-            poly_trim = []
+            poly_trim_list = []
             primary_lines = []
 
             # retrieve primary lines
@@ -341,7 +359,7 @@ class LineGroupping:
                 trim = PolygonTrimming(line_index = j, 
                                        line_cleanup = i.get_line(j))
                 
-                poly_trim.append(trim)
+                poly_trim_list.append(trim)
 
             polys = self.polys.loc[idx].geometry
             poly_primary = []
@@ -349,26 +367,31 @@ class LineGroupping:
                 if p.contains(primary_lines[0]) or p.contains(primary_lines[1]):
                     poly_primary.append(p)
                 else:
-                    for trim in poly_trim:
-                        if p.contains(trim.line_cleanup):
+                    for trim in poly_trim_list:
+                        # TODO: sometimes contains can not torlerance tiny error: 1e-11
+                        # buffer polygon by 1 meter to make sure contains works
+                        if p.buffer(1).contains(trim.line_cleanup):
                             trim.poly_cleanup = p
                             trim.poly_index = j
 
             poly_primary = MultiPolygon(poly_primary)
-            for t in poly_trim:
+            for t in poly_trim_list:
                 t.poly_primary = poly_primary
 
-            for p in poly_trim:
+            for p in poly_trim_list:
                 p.trim()
+                # update main line and polygon dataframe
                 self.polys.at[p.poly_index, 'geometry'] = p.poly_cleanup
                 self.data.at[p.line_index, 'geometry'] = p.line_cleanup
+                # update VertexNode's line
+                self.update_line_in_vertex_node(p.line_index, p.line_cleanup)
 
     def run_groupping(self):    
         self.create_vertex_list()
         if not self.has_groub_attr:
             self.group_lines()
 
-        self.find_vertex_for_poly_overlaps()
+        self.find_vertex_for_poly_trimming()
         self.data["group"] = self.groups  # assign group attribute
 
     def run_cleanup(self):    
@@ -385,6 +408,14 @@ class LineGroupping:
                 merged_line = worker.merge_all_lines()
                 if merged_line:
                     self.merged.at[i.Index, "geometry"] = merged_line
+    
+    def check_geom_validity(self):
+        """
+        Check MultiLineString and MultiPolygon in line and polygon dataframe
+        Save multis to sperate layers for user to double check
+        """
+        #  remove null geometry
+        pass
 
     def save_file(self, out_line, out_poly):
         self.data.to_file(out_line)
