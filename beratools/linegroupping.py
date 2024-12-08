@@ -5,6 +5,7 @@ from shapely.geometry import Point, MultiPolygon, Polygon, LineString, MultiLine
 from enum import IntEnum, unique
 from collections import defaultdict
 from itertools import chain
+from typing import Union
 import geopandas as gpd
 
 from dataclasses import dataclass, field
@@ -57,49 +58,47 @@ class VertexClass(IntEnum):
     FOUR_WAY_ONE_PRIMARY_LINE = 4
     FOUR_WAY_TWO_PRIMARY_LINE = 5
 
+@dataclass
+class SingleLine():
+    line_id: int = field(default=0)
+    line: Union[LineString, MultiLineString] = field(default=None)
+    sim_line: Union[LineString, MultiLineString] = field(default=None)
+    vertex_index: int = field(default=0)
+    group: int = field(default=0)
+
+    def get_angle_for_line(self):
+        return get_angle(self.sim_line, self.vertex_index)
+
 class VertexNode:
     """
-    line_list: {'line_id': line_id,
-                'sim_line': sim_line,
-                'line': line,
-                'vertex_index': 0 or -1, 
-                'line_id': number}
     """
-    def __init__(self, line_id, sim_line, line, vertex_index, group=None) -> None:
+    def __init__(self, line_id, line, sim_line, vertex_index, group=None) -> None:
         self.vertex = None
-        self.line_list = []  
+        self.line_list = []
         self.line_connected = []  # pairs of lines connected
         self.line_not_connected = []
         self.vertex_class = None
 
         if line:
-            self.add_line(line_id, sim_line, line, vertex_index, group)
+            self.add_line(SingleLine(line_id, line, sim_line, vertex_index, group))
 
     def set_vertex(self, line, vertex_index):
         """ Set vertex coord """
         self.vertex = shapely.force_2d(shapely.get_point(line, vertex_index))
     
-    def add_line(self, line_id, sim_line, line, vertex_index, group=None):
+    def add_line(self, l_dupli):
         """ Common function for adding line when creating or merging other VertexNode """
-        self.line_list.append({'line_id': line_id, 
-                               'sim_line': sim_line, 
-                               'line': line, 
-                               'vertex_index': vertex_index, 
-                               'group': group})
-        self.set_vertex(line, vertex_index)
+        self.line_list.append(l_dupli)
+        self.set_vertex(l_dupli.line, l_dupli.vertex_index)
 
     def get_line(self, line_id):
         for line in self.line_list:
-            if line['line_id'] == line_id:
-                return line['line']
+            if line.line_id == line_id:
+                return line.line
 
     def merge(self, vertex):
         """ merge other VertexNode if they have same vertex coords """
-        self.add_line(vertex.line_list[0]['line_id'],
-                      vertex.line_list[0]['sim_line'],
-                      vertex.line_list[0]['line'], 
-                      vertex.line_list[0]['vertex_index'], 
-                      vertex.line_list[0]['group'])
+        self.add_line(vertex.line_list[0])
 
     def assign_vertex_class(self):
         if len(self.line_list) == 4:
@@ -118,7 +117,7 @@ class VertexNode:
     def has_group_attr(self):
         """If all values in group list are valid value, return True"""
         for i in self.line_list:
-            if not i['group']:
+            if not i.group:
                 return False
 
         return True
@@ -130,7 +129,7 @@ class VertexNode:
             self.group_line_by_angle()
 
         # record line not connected
-        all_line_ids = {i['line_id'] for i in self.line_list}  # set of line id
+        all_line_ids = {i.line_id for i in self.line_list} # set of line id
         self.line_not_connected = list(all_line_ids - set(chain(*self.line_connected)))
         
         self.assign_vertex_class()
@@ -138,7 +137,7 @@ class VertexNode:
     def group_line_by_attribute(self):
         group_line = defaultdict(list)
         for i in self.line_list:
-            group_line[i['group']].append(i['line_id'])
+            group_line[i.group].append(i.line_id)
 
         for value in group_line.values():
             if len(value) > 1:
@@ -150,27 +149,36 @@ class VertexNode:
             return
 
         # if there are 2 and more lines
-        angles = [get_angle(i['sim_line'], i['vertex_index']) for i in self.line_list]
-        angle_visited = [False]*len(angles)
+        new_angles = [i.get_angle_for_line() for i in self.line_list]
+        angle_visited = [False] * len(new_angles)
 
         if len(self.line_list) == 2:
-            angle_diff = abs(angles[0] - angles[1])
+            angle_diff = abs(new_angles[0] - new_angles[1])
             angle_diff = angle_diff if angle_diff <= np.pi else angle_diff-np.pi
 
             #if angle_diff >= TURN_ANGLE_TOLERANCE:
-            self.line_connected.append((self.line_list[0]['line_id'], self.line_list[1]['line_id']))
+            self.line_connected.append(
+                (
+                    self.line_list[0].line_id,
+                    self.line_list[1].line_id,
+                )
+            )
             return
 
         # three and more lines
-        for i, angle_1 in enumerate(angles):
-            for j, angle_2 in enumerate(angles[i+1:]):
+        for i, angle_1 in enumerate(new_angles):
+            for j, angle_2 in enumerate(new_angles[i + 1 :]):
                 if not angle_visited[i+j+1]:
                     angle_diff = abs(angle_1 - angle_2)
                     angle_diff = angle_diff if angle_diff <= np.pi else angle_diff-np.pi
                     if angle_diff < ANGLE_TOLERANCE or np.pi-ANGLE_TOLERANCE < abs(angle_1-angle_2) < np.pi+ANGLE_TOLERANCE:
                         angle_visited[j+i+1] = True  # tenth of PI
-                        self.line_connected.append((self.line_list[i]['line_id'], self.line_list[i+j+1]['line_id']))
-
+                        self.line_connected.append(
+                            (
+                                self.line_list[i].line_id,
+                                self.line_list[i+j+1].line_id,
+                            )
+                        )
 
 class LineGroupping:
     def __init__(self, in_line_file, in_poly_file):
@@ -201,8 +209,8 @@ class LineGroupping:
         for idx, s_geom, geom, group in zip(
             *zip(*self.sim_geom.items()), self.data.geometry, self.groups
         ):
-            self.vertex_list.append(VertexNode(idx, s_geom, geom, 0, group))
-            self.vertex_list.append(VertexNode(idx, s_geom, geom, -1, group))
+            self.vertex_list.append(VertexNode(idx, geom, s_geom, 0, group))
+            self.vertex_list.append(VertexNode(idx, geom, s_geom, -1, group))
 
         v_points = []
         for i in self.vertex_list:
