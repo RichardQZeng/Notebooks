@@ -155,10 +155,17 @@ class VertexNode:
                 return False
 
         return True
+    
+    def need_regroupping(self):
+        pass
 
     def check_connectivity(self):
+        # TODO add regroupping when new lines are added
         if self.has_group_attr():
-            self.group_line_by_attribute()
+            if self.need_regroupping():
+                self.group_regroup()
+            else:
+                self.group_line_by_attribute()
         else:
             self.group_line_by_angle()
 
@@ -167,7 +174,10 @@ class VertexNode:
         self.line_not_connected = list(all_line_ids - set(chain(*self.line_connected)))
         
         self.assign_vertex_class()
-        
+    
+    def group_regroup(self):
+        pass
+
     def group_line_by_attribute(self):
         group_line = defaultdict(list)
         for i in self.line_list:
@@ -226,6 +236,7 @@ class LineGroupping:
         self.G = nk.Graph(len(self.lines))
         self.merged_vertex_list = []
         self.has_groub_attr = False
+        self.need_regroupping = False
         self.groups = [None] * len(self.lines)
 
         self.vertex_list = []
@@ -244,6 +255,8 @@ class LineGroupping:
         if GROUP_ATTRIBUTE in self.lines.keys():
             self.groups = self.lines[GROUP_ATTRIBUTE]
             self.has_groub_attr = True
+            if self.groups.hasnans:
+                self.need_regroupping = True
 
         for idx, s_geom, geom, group in zip(
             *zip(*self.sim_geom.items()), self.lines.geometry, self.groups
@@ -398,6 +411,13 @@ class LineGroupping:
         self.find_vertex_for_poly_trimming()
         self.lines["group"] = self.groups  # assign group attribute
 
+    def run_regroupping(self):
+        """
+        Run this when new lines are added to groupped file.
+        Some new lines has empty group attributes
+        """
+        pass
+
     def run_cleanup(self):    
         self.line_and_poly_cleanup()
 
@@ -438,7 +458,7 @@ class LineGroupping:
     def save_file(self, out_file):
         self.lines.to_file(out_file, layer="merged_lines")
         self.polys.to_file(out_file, layer="clean_footprint")
-        
+
         if self.invalid_lines:
             self.invalid_lines.to_file(out_file, layer="invalid_lines")
 
