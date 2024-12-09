@@ -419,11 +419,31 @@ class LineGroupping:
         Save multis to sperate layers for user to double check
         """
         #  remove null geometry
-        pass
+        self.lines = self.lines = self.lines[
+            ~self.lines.geometry.isna() & ~self.lines.geometry.is_empty
+        ]
 
-    def save_file(self, out_line, out_poly):
-        self.lines.to_file(out_line)
-        self.polys.to_file(out_poly)
+        self.polys = self.polys = self.polys[
+            ~self.polys.geometry.isna() & ~self.polys.geometry.is_empty
+        ]
+
+        # save MultiLineStrinng annd MultiPolygon
+        self.invalid_lines = self.lines[
+            self.lines.geometry.geom_type == "MultiLineString"
+        ]
+        self.invalid_polygons = self.polygons[
+            self.polygons.geometry.geom_type == "MultiPolygon"
+        ]
+
+    def save_file(self, out_file):
+        self.lines.to_file(out_file, layer="merged_lines")
+        self.polys.to_file(out_file, layer="clean_footprint")
+        
+        if self.invalid_lines:
+            self.invalid_lines.to_file(out_file, layer="invalid_lines")
+
+        if self.invalid_polygons:
+            self.invalid_polygons.to_file(out_file, layer="invalid_polygons")
 
 @dataclass
 class PolygonTrimming():
