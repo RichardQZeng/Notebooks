@@ -236,7 +236,7 @@ class LineGrouping:
 
         self.G = nk.Graph(len(self.lines))
         self.merged_vertex_list = []
-        self.has_groub_attr = False
+        self.has_group_attr = False
         self.need_regrouping = False
         self.groups = [None] * len(self.lines)
 
@@ -255,7 +255,7 @@ class LineGrouping:
         # check if data has group column
         if GROUP_ATTRIBUTE in self.lines.keys():
             self.groups = self.lines[GROUP_ATTRIBUTE]
-            self.has_groub_attr = True
+            self.has_group_attr = True
             if self.groups.hasnans:
                 self.need_regrouping = True
 
@@ -406,7 +406,7 @@ class LineGrouping:
 
     def run_grouping(self):
         self.create_vertex_list()
-        if not self.has_groub_attr:
+        if not self.has_group_attr:
             self.group_lines()
 
         self.find_vertex_for_poly_trimming()
