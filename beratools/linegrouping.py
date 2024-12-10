@@ -34,6 +34,7 @@ CONCERN_CLASSES = (
 
 
 def points_in_line(line):
+    """ return point list of line """
     point_list = []
     try:
         for point in list(line.coords):  # loops through every point in a line
