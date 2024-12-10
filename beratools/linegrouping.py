@@ -157,13 +157,13 @@ class VertexNode:
 
         return True
     
-    def need_regroupping(self):
+    def need_regrouping(self):
         pass
 
     def check_connectivity(self):
-        # TODO add regroupping when new lines are added
+        # TODO add regrouping when new lines are added
         if self.has_group_attr():
-            if self.need_regroupping():
+            if self.need_regrouping():
                 self.group_regroup()
             else:
                 self.group_line_by_attribute()
@@ -225,7 +225,7 @@ class VertexNode:
                             )
                         )
 
-class LineGroupping:
+class LineGrouping:
     def __init__(self, in_line_file, in_poly_file):
         # remove empty and null geometry
         self.lines = gpd.read_file(in_line_file)
@@ -237,7 +237,7 @@ class LineGroupping:
         self.G = nk.Graph(len(self.lines))
         self.merged_vertex_list = []
         self.has_groub_attr = False
-        self.need_regroupping = False
+        self.need_regrouping = False
         self.groups = [None] * len(self.lines)
 
         self.vertex_list = []
@@ -257,7 +257,7 @@ class LineGroupping:
             self.groups = self.lines[GROUP_ATTRIBUTE]
             self.has_groub_attr = True
             if self.groups.hasnans:
-                self.need_regroupping = True
+                self.need_regrouping = True
 
         for idx, s_geom, geom, group in zip(
             *zip(*self.sim_geom.items()), self.lines.geometry, self.groups
@@ -404,7 +404,7 @@ class LineGroupping:
                 # update VertexNode's line
                 self.update_line_in_vertex_node(p.line_index, p.line_cleanup)
 
-    def run_groupping(self):    
+    def run_grouping(self):
         self.create_vertex_list()
         if not self.has_groub_attr:
             self.group_lines()
@@ -412,9 +412,9 @@ class LineGroupping:
         self.find_vertex_for_poly_trimming()
         self.lines["group"] = self.groups  # assign group attribute
 
-    def run_regroupping(self):
+    def run_regrouping(self):
         """
-        Run this when new lines are added to groupped file.
+        Run this when new lines are added to grouped file.
         Some new lines has empty group attributes
         """
         pass
