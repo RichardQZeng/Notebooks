@@ -226,7 +226,7 @@ class VertexNode:
                         )
 
 class LineGrouping:
-    def __init__(self, in_line_file, in_poly_file):
+    def __init__(self, in_line_file, in_poly_file=None):
         # remove empty and null geometry
         self.lines = gpd.read_file(in_line_file)
         self.lines = self.lines[~self.lines.geometry.isna() & ~self.lines.geometry.is_empty]
@@ -239,15 +239,16 @@ class LineGrouping:
         self.has_group_attr = False
         self.need_regrouping = False
         self.groups = [None] * len(self.lines)
+        self.merged = None  # merged lines
 
         self.vertex_list = []
         self.vertex_of_concern = []
         self.v_index = None  # sindex of all vertices for vertex_list
 
-        self.polys = gpd.read_file(in_poly_file)
-        self.merged = None  # merged lines
+        if in_poly_file:
+            self.polys = gpd.read_file(in_poly_file)
 
-        # invalid geoms in final goem list
+        # invalid geoms in final geom list
         self.invalid_lines = None
         self.invalid_polygons = None
 
